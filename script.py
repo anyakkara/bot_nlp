@@ -1,9 +1,21 @@
+import os
+from dotenv import load_dotenv
 import telebot
 import requests
 import json
 
-# Замените 'YOUR_BOT_TOKEN' на ваш токен от BotFather
-API_TOKEN = 'YOUR_BOT_TOKEN'
+# Загружаем переменные из .env файла
+load_dotenv()
+
+# Получаем токен из переменных окружения
+API_TOKEN = os.getenv('BOT_TOKEN')
+LM_STUDIO_URL = os.getenv('LM_STUDIO_URL', 'http://localhost:1234/v1/chat/completions')
+
+# Проверяем что токен загружен
+if not API_TOKEN:
+    raise ValueError("❌ BOT_TOKEN не найден в .env файле!")
+
+bot = telebot.TeleBot(API_TOKEN)
 bot = telebot.TeleBot(API_TOKEN)
 
 # Команды
