@@ -16,7 +16,36 @@ if not API_TOKEN:
     raise ValueError("❌ BOT_TOKEN не найден в .env файле!")
 
 bot = telebot.TeleBot(API_TOKEN)
-bot = telebot.TeleBot(API_TOKEN)
+
+# Словарь для хранения истории диалогов пользователей
+# Ключ — user_id (уникальный идентификатор пользователя в Telegram)
+# Значение — список сообщений с ролями user и assistant
+user_conversations = {}
+
+def get_or_create_conversation(user_id):
+    """Бот находит или создает новую (пустую) строку с историей диалога для данного user_id"""
+    if user_id not in user_conversations:
+        user_conversations[user_id] = []
+    return user_conversations[user_id]
+
+def add_user_message(conversation, message):
+    """Бот добавляет в эту строку новый запрос пользователя («role: user»)"""
+    conversation.append({
+        "role": "user",
+        "content": message
+    })
+
+def add_assistant_message(conversation, message):
+    """Полученный от модели ответ бот добавляет в строку с историей («role: assistant»)"""
+    conversation.append({
+        "role": "assistant", 
+        "content": message
+    })
+
+def clear_conversation_history(user_id):
+    """Очищает историю диалога для пользователя"""
+    if user_id in user_conversations:
+        user_conversations[user_id] = []
 
 # Команды
 @bot.message_handler(commands=['start'])
@@ -26,6 +55,7 @@ def send_welcome(message):
         "Доступные команды:\n"
         "/start - вывод всех доступных команд\n"
         "/model - выводит название используемой языковой модели\n"
+        "/clear - очищает историю нашего диалога\n"
         "Отправьте любое сообщение, и я отвечу с помощью LLM модели."
     )
     bot.reply_to(message, welcome_text)
@@ -45,19 +75,27 @@ def send_model_name(message):
     except Exception as e:
         bot.reply_to(message, f'Ошибка подключения к LM Studio: {e}')
 
+@bot.message_handler(commands=['clear'])
+def clear_history(message):
+    user_id = message.from_user.id
+    clear_conversation_history(user_id)
+    bot.reply_to(message, "✅ История нашего диалога очищена! Начнем заново.")
+
 @bot.message_handler(func=lambda message: True)
 def handle_message(message):
     try:
+        user_id = message.from_user.id
         user_query = message.text
         
-        # Формируем запрос к LM Studio API
+        # Получаем историю диалога пользователя
+        conversation = get_or_create_conversation(user_id)
+        
+        # Добавляем новый запрос пользователя
+        add_user_message(conversation, user_query)
+        
+        # Отправляем всю историю в LM Studio
         request = {
-            "messages": [
-                {
-                    "role": "user",
-                    "content": user_query
-                }
-            ],
+            "messages": conversation,
             "temperature": 0.7,
             "max_tokens": 500
         }
@@ -73,13 +111,27 @@ def handle_message(message):
         if response.status_code == 200:
             response_data = response.json()
             bot_reply = response_data['choices'][0]['message']['content']
+            
+            # Добавляем ответ ассистента в историю
+            add_assistant_message(conversation, bot_reply)
+            
+            # Ограничиваем размер истории
+            if len(conversation) > 20:
+                user_conversations[user_id] = conversation[-20:]
+            
             bot.reply_to(message, bot_reply)
         else:
+            if conversation and conversation[-1]["role"] == "user":
+                conversation.pop()
             bot.reply_to(message, f'Ошибка API: {response.status_code}')
             
     except requests.exceptions.ConnectionError:
-        bot.reply_to(message, 'Ошибка: Не могу подключиться к LM Studio. Убедитесь, что сервер запущен на localhost:1234')
+        if 'conversation' in locals() and conversation and conversation[-1]["role"] == "user":
+            conversation.pop()
+        bot.reply_to(message, 'Ошибка: Не могу подключиться к LM Studio.')
     except Exception as e:
+        if 'conversation' in locals() and conversation and conversation[-1]["role"] == "user":
+            conversation.pop()
         bot.reply_to(message, f'Произошла ошибка: {str(e)}')
 
 # Запуск бота
